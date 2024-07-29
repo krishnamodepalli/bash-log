@@ -1,0 +1,232 @@
+#!/bin/bash
+
+# Author:   Krishna Modepalli, ChatGPT
+# Created:  28th July 2024
+# Updated:  28the July 2024
+# Version:  0.1.0           - indeed the first for production.
+# Description:  This is an independent logger, just built for the sake of the
+#   current project ( Converting the Video on upload ).
+#   Still under testing, but is sent to production.
+
+
+# The log levels 0 through 4, from DEBUG through FATAL.
+declare -A LOG_LEVELS
+LOG_LEVELS[0]="DEBUG"
+LOG_LEVELS[1]="INFO"
+LOG_LEVELS[2]="WARN"
+LOG_LEVELS[3]="ERROR"
+LOG_LEVELS[4]="FATAL"
+
+# Colors to indicate the severity of the log message    - only used for console printing, not for file logging.
+RED='\033[0;31m'
+LIGHT_RED='\033[1;31m'
+YELLOW='\033[0;33m'
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+DARK_RED='\033[0;31m'
+RESET='\033[0m'
+
+# Initial values
+LOGFILE=""
+OUTPUT_TYPE=1   # Default to console
+LOGLEVEL=1      # Default to INFO
+TIME_FORMAT="%Y-%m-%d %H:%M:%S"  # Default time format
+SHOW_TIME=true  # Default to show time
+
+# Print help message
+print_help() {
+  cat << EOF
+Usage: logger [options] "message"
+
+Options:
+  -g             Generate sample .logger.conf file in the project.
+  -o <type>      Output type:
+                   1 - Console
+                   2 - File
+                   3 - Both
+  -f <logfile>   Specify the log file (required for output type 2 and 3).
+  -L <level>     Log level:
+                   0 | DEBUG
+                   1 | INFO
+                   2 | WARN
+                   3 | ERROR
+                   4 | FATAL
+  -t             Toggle to include timestamp.
+  -F <format>    Specify custom time format for the timestamp (if -t is used) (default format: "%m-%d-%y %H:%M:%S").
+  -h             Display this help message.
+EOF
+}
+
+# Function to print log message
+logger() {
+  local OPTIND
+  local logfile=""
+  local output_type=1
+  local loglevel=1
+  local time_format="$TIME_FORMAT"
+  local message
+  local log_date
+  local log_message
+
+  local min_console_level
+  local min_file_level
+
+  # Parse options
+  while getopts "go:f:L:tF:h" opt; do
+    case ${opt} in
+      g )
+          echo "I will generate a default .logger.conf and then exit."
+          cat >> "./.logger.conf" << EOF
+# 0 for DEBUG
+# 1 for INFO
+# 2 for WARN
+# 3 for ERROR
+# 4 for FATAL
+# change the following settings as you wish
+# + PLEASE DO NOT ADD OTHER OPTIONS OR SETTINGS.
+
+CONSOLE_LEVEL=1
+FILE_LEVEL=1
+EOF
+        exit 1
+        ;;
+      o )
+        output_type=$OPTARG
+        ;;
+      f )
+        logfile=$OPTARG
+        ;;
+      L )
+        # Check if OPTARG is a valid integer or named log level
+        if [[ $OPTARG =~ ^[0-4]$ ]]; then
+          loglevel=$OPTARG
+        else
+          # Handle named log levels
+          local found=false
+          for key in "${!LOG_LEVELS[@]}"; do
+            if [[ "${LOG_LEVELS[$key]}" == "$OPTARG" ]]; then
+              loglevel=$key
+              found=true
+              break
+            fi
+          done
+
+          if [ "$found" = false ]; then
+            echo "Invalid log level: $OPTARG"
+            return 1
+          fi
+        fi
+        ;;
+      t )
+        SHOW_TIME=true
+        ;;
+      F )
+        time_format=$OPTARG
+        ;;
+      h )
+        print_help
+        return 0
+        ;;
+      \? )
+        echo "Invalid option: -$OPTARG" >&2
+        return 1
+        ;;
+      : )
+        echo "Invalid option: -$OPTARG requires an argument" >&2
+        return 1
+        ;;
+    esac
+  done
+  shift $((OPTIND -1))
+
+  # now check for the conf file
+  if [ -f "./.logger.conf" ]; then
+      source "./.logger.conf"
+      min_console_level=$CONSOLE_LEVEL
+      min_file_level=$FILE_LEVEL
+  else
+      min_console_level=1
+      min_file_level=1
+  fi
+
+  # Check if message is provided
+  if [ $# -lt 1 ]; then
+    echo "Error: No message provided."
+    print_help
+    return 1
+  fi
+
+  message="$*"
+
+  # Validate loglevel
+  if [ -z "${LOG_LEVELS[$loglevel]}" ]; then
+    echo "Error: Invalid log level index: $loglevel"
+    return 1
+  fi
+
+  # Get current date and time if needed
+  if $SHOW_TIME; then
+    log_date=$(date +"$time_format")
+  else
+    log_date=""
+  fi
+
+  # Get log level name
+  local log_level_name=${LOG_LEVELS[$loglevel]}
+
+  # Format log message
+  if [ -n "$log_date" ]; then
+    log_message="${log_date} [${log_level_name}]:\t${message}"
+  else
+    log_message="[${log_level_name}]:\t${message}"
+  fi
+
+  # Function to print message with color
+  print_console() {
+    if [ "$min_console_level" -gt "$loglevel" ]; then
+        return -1
+    fi
+    case $loglevel in
+      0) color=$GREEN;;    # DEBUG
+      1) color=$BLUE;;     # INFO
+      2) color=$YELLOW;;   # WARN
+      3) color=$LIGHT_RED;;# ERROR
+      4) color=$DARK_RED;; # FATAL
+      *) color=$RESET;;    # Default (no color)
+    esac
+    echo -e "${color}${log_message}${RESET}"
+  }
+
+  # Output message based on flags
+  case $output_type in
+    1)
+      print_console
+      ;;
+    2)
+      if [ -n "$logfile" ]; then
+        echo -e "$log_message" >> "$logfile"
+      else
+        echo "Logfile must be specified with option -f for output type 2."
+        return 1
+      fi
+      ;;
+    3)
+      if [ -n "$logfile" ]; then
+        print_console
+        echo -e "$log_message" >> "$logfile"
+      else
+        echo "Logfile must be specified with option -f for output type 3."
+        return 1
+      fi
+      ;;
+    *)
+      echo "Invalid output type: $output_type"
+      return 1
+      ;;
+  esac
+}
+
+# Example usage
+# logger -f mylogfile.log -o 3 -L ERROR -t -F "%Y-%m-%d %H:%M:%S" "This is an error message"
+logger $@
+
